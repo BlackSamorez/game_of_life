@@ -59,11 +59,11 @@ namespace cuda_kernels{
 	__global__ void calc_next_generation_shared_areas(int* current_grid, int* next_grid, int length, int width, int heighth){
 		// Call to global memory approx 2 times per cell - fast
 		//copy areas for each block into it's shared memory and then calculate neighbours
-		int column = blockIdx.x * blockDim.x + threadIdx.x - 1;
-		int row = blockIdx.y * blockDim.y + threadIdx.y - 1;
-		int level = blockIdx.z * blockDim.z + threadIdx.z - 1;
+		int column = blockIdx.x * (blockDim.x - 2) + threadIdx.x - 1;
+		int row = blockIdx.y * (blockDim.y - 2) + threadIdx.y - 1;
+		int level = blockIdx.z * (blockDim.z - 2) + threadIdx.z - 1;
 
-		if (column < length + 2 and row < width + 2 and level < heighth + 2)
+		if (column < length + 1 and row < width + 1 and level < heighth + 1)
 		{
 			int place = index_from_coordinates(column, row, level, length, width, heighth);
 
@@ -91,7 +91,7 @@ namespace cuda_kernels{
 					newstate = 1;
 				}
 
-				next_grid[place] = newstate; //slow
+				next_grid[place] = newstate; //slow ////////// an illegal memory access was encountered
 			}
 		}
 	}
@@ -216,9 +216,9 @@ int main(){
 	for (int i = 0; i < 10; ++i)
 	{
 		append_state_to_file("test.out", field0_d, length, width, heighth);
-		cuda_kernels::calc_next_generation_all_global<<<bpg, tpb>>>(field0_d, field1_d, length, width, heighth);
-		gpuErrchk( cudaPeekAtLastError() );
-        gpuErrchk( cudaDeviceSynchronize() );
+		cuda_kernels::calc_next_generation_shared_areas<<<bpg, tpb>>>(field0_d, field1_d, length, width, heighth);
+		gpuErrchk(cudaPeekAtLastError());
+        gpuErrchk(cudaDeviceSynchronize());
 
 		std::swap(field0_d, field1_d);
 	}
