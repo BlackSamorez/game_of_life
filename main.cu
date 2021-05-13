@@ -4,6 +4,7 @@
 #include <sstream>
 #include <fstream>
 #include <iterator>
+#include <CLI11.hpp>
 
 
 #define gpuErrchk(ans) { gpuAssert( (ans), __FILE__, __LINE__ ); }
@@ -36,7 +37,7 @@ namespace cuda_kernels{
 		return grid[index_from_coordinates(column + -1, row + -1, level + -1, length, width, heighth)] + grid[index_from_coordinates(column + -1, row + -1, level + 0, length, width, heighth)] + grid[index_from_coordinates(column + -1, row + -1, level + 1, length, width, heighth)] + grid[index_from_coordinates(column + -1, row + 0, level + -1, length, width, heighth)] + grid[index_from_coordinates(column + -1, row + 0, level + 0, length, width, heighth)] + grid[index_from_coordinates(column + -1, row + 0, level + 1, length, width, heighth)] + grid[index_from_coordinates(column + -1, row + 1, level + -1, length, width, heighth)] + grid[index_from_coordinates(column + -1, row + 1, level + 0, length, width, heighth)] + grid[index_from_coordinates(column + -1, row + 1, level + 1, length, width, heighth)] + grid[index_from_coordinates(column + 0, row + -1, level + -1, length, width, heighth)] + grid[index_from_coordinates(column + 0, row + -1, level + 0, length, width, heighth)] + grid[index_from_coordinates(column + 0, row + -1, level + 1, length, width, heighth)] + grid[index_from_coordinates(column + 0, row + 0, level + -1, length, width, heighth)] + grid[index_from_coordinates(column + 0, row + 0, level + 1, length, width, heighth)] + grid[index_from_coordinates(column + 0, row + 1, level + -1, length, width, heighth)] + grid[index_from_coordinates(column + 0, row + 1, level + 0, length, width, heighth)] + grid[index_from_coordinates(column + 0, row + 1, level + 1, length, width, heighth)] + grid[index_from_coordinates(column + 1, row + -1, level + -1, length, width, heighth)] + grid[index_from_coordinates(column + 1, row + -1, level + 0, length, width, heighth)] + grid[index_from_coordinates(column + 1, row + -1, level + 1, length, width, heighth)] + grid[index_from_coordinates(column + 1, row + 0, level + -1, length, width, heighth)] + grid[index_from_coordinates(column + 1, row + 0, level + 0, length, width, heighth)] + grid[index_from_coordinates(column + 1, row + 0, level + 1, length, width, heighth)] + grid[index_from_coordinates(column + 1, row + 1, level + -1, length, width, heighth)] + grid[index_from_coordinates(column + 1, row + 1, level + 0, length, width, heighth)] + grid[index_from_coordinates(column + 1, row + 1, level + 1, length, width, heighth)];
 	}
 
-	__global__ void calc_next_generation_all_global(cell* current_grid, cell* next_grid, int length, int width, int heighth)
+	__global__ void calc_next_generation_all_global(cell* current_grid, cell* next_grid, int length, int width, int heighth, int llive, int rlive, int lborn, int rborn)
 	{ 
 		// Call to global memory approx 28 times per cell - very slow
 		int column = blockIdx.x * blockDim.x + threadIdx.x;
@@ -50,7 +51,7 @@ namespace cuda_kernels{
 			cell state = current_grid[place]; // slow
 			int neighbours = calc_neighbours(current_grid, column, row, level, length, width, heighth); // 26 * slow
 
-			if ((state == 0 and neighbours >= 6 and neighbours <= 6) or (state == 1 and neighbours >= 5 and neighbours <= 7))
+			if ((state == 0 and neighbours >= lborn and neighbours <= rborn) or (state == 1 and neighbours >= llive and neighbours <= rlive))
 			{
 				next_grid[place] = 1;
 			} else {
@@ -59,7 +60,7 @@ namespace cuda_kernels{
 		}
 	}
 
-	__global__ void calc_next_generation_shared_areas(cell* current_grid, cell* next_grid, int length, int width, int heighth)
+	__global__ void calc_next_generation_shared_areas(cell* current_grid, cell* next_grid, int length, int width, int heighth, int llive, int rlive, int lborn, int rborn)
 	{
 		// Call to global memory approx 2 times per cell - fast
 		int column = blockIdx.x * (blockDim.x - 2) + threadIdx.x - 1;
@@ -84,7 +85,7 @@ namespace cuda_kernels{
 
 				cell state = area[threadIdx.x + threadIdx.y * blockDim.x + threadIdx.z * blockDim.x * blockDim.y];
 				
-				if ((state == 0 and neighbours >= 6 and neighbours <= 7) or (state == 1 and neighbours >= 4 and neighbours <= 7))
+				if ((state == 0 and neighbours >= lborn and neighbours <= rborn) or (state == 1 and neighbours >= llive and neighbours <= rlive))
 				{
 					next_grid[place] = 1;
 				} else {
@@ -94,7 +95,7 @@ namespace cuda_kernels{
 		}
 	}
 
-	__global__ void calculate_n_generations(cell* current_grid, cell* next_grid, int length, int width, int heighth, int n)
+	__global__ void calculate_n_generations(int n, cell* current_grid, cell* next_grid, int length, int width, int heighth, int llive, int rlive, int lborn, int rborn)
 	{
 		//copy areas for each block into it's shared memory and then calculate neighbours
 		int column = blockIdx.x * (blockDim.x - 2) + threadIdx.x - 1;
@@ -115,12 +116,15 @@ namespace cuda_kernels{
 			int neighbours;
 			int state;
 
+			cell* now = current_grid;
+			cell* next = next_grid;
+			cell* temp;
 
 			for (int i = 0; i < n; ++i)
 			{
 				if (threadIdx.x == 0 or threadIdx.x == blockDim.x - 1 or threadIdx.y == 0 or threadIdx.y == blockDim.y - 1 or threadIdx.z == 0 or threadIdx.z == blockDim.z - 1 or column == length or row == width or level == heighth)
 				{
-					area[threadIdx.x + threadIdx.y * blockDim.x + threadIdx.z * blockDim.x * blockDim.y] = current_grid[place]; // pull outer cells
+					area[threadIdx.x + threadIdx.y * blockDim.x + threadIdx.z * blockDim.x * blockDim.y] = now[place]; // pull outer cells
 				}
 
 				__syncthreads();
@@ -129,7 +133,7 @@ namespace cuda_kernels{
 
 				state = area[threadIdx.x + threadIdx.y * blockDim.x + threadIdx.z * blockDim.x * blockDim.y];
 					
-				if ((state == 0 and neighbours >= 6 and neighbours <= 7) or (state == 1 and neighbours >= 4 and neighbours <= 7))
+				if ((state == 0 and neighbours >= lborn and neighbours <= rborn) or (state == 1 and neighbours >= llive and neighbours <= rlive))
 				{
 					area[threadIdx.x + threadIdx.y * blockDim.x + threadIdx.z * blockDim.x * blockDim.y] = 1;
 				} else {
@@ -138,8 +142,12 @@ namespace cuda_kernels{
 
 				if (threadIdx.x == 1 or threadIdx.x == blockDim.x - 2 or column == length - 1 or threadIdx.y == 1 or threadIdx.y == blockDim.y - 2 or row == width - 1 or threadIdx.z == 1 or threadIdx.z == blockDim.z - 2 or level == heighth - 1)
 				{
-					next_grid[place] = area[threadIdx.x + threadIdx.y * blockDim.x + threadIdx.z * blockDim.x * blockDim.y];
+					next[place] = area[threadIdx.x + threadIdx.y * blockDim.x + threadIdx.z * blockDim.x * blockDim.y];
 				}
+
+				temp = now;
+				now = next;
+				next = temp;
 
 				__syncthreads();
 			}
@@ -224,12 +232,37 @@ void append_state_to_file(std::string filename, cell* field_d, int length, int w
 	file << "0 0 0 0\n";
 }
 
-int main(){
-	std::string filename;
-	std::cin >> filename;
-	int length = 20, width = 20, heighth = 20;
+int main(int argc, char** argv){
 
-	read_size(filename, &length, &width, &heighth);
+	CLI::App app{"Cuda game of life"};
+
+	std::string input_filename = "glider.in";
+	app.add_option("-i,--input", input_filename, "Input filename");
+
+	std::string output_filename = "test.out";
+	app.add_option("-o,--output", output_filename, "Output filename");
+
+	int g = 100;
+	app.add_option("-g,--generations", g, "Number of generations to calculate");
+
+	dim3 threads_per_block(10, 10, 10);
+	//app.add_option("-b,--block", threads_per_block, "Number of threads per block (3D)");
+
+	std::vector<int> rules = {5, 7, 6, 7};
+	app.add_option("-r,--rules", rules, "Number of threads per block (3D)");
+
+	int type = 1;
+	app.add_option("-t,--type", type, "0 - all global, 1 - shared areas, 2 - continuous shared");
+
+	int skip = 1;
+	app.add_option("-s,--skip", skip, "how often to write state (only for continuous shared)");
+
+	CLI11_PARSE(app, argc, argv);
+
+
+	int length, width, heighth;
+
+	read_size(input_filename, &length, &width, &heighth);
 
 	cell field_h[length * width * heighth];
 
@@ -244,7 +277,7 @@ int main(){
 		}
 	}
 
-	read_input(filename, field_h);
+	read_input(input_filename, field_h);
 
 	cell* field0_d;
 	cell* field1_d;
@@ -255,20 +288,26 @@ int main(){
 	gpuErrchk(cudaMemcpy(field0_d, field_h, size, cudaMemcpyHostToDevice));
 
 	std::ofstream ofs;
-	ofs.open("test.out", std::ofstream::out | std::ofstream::trunc);
+	ofs.open(output_filename, std::ofstream::out | std::ofstream::trunc);
 	ofs.close();
 
-	dim3 tpb(10, 10, 10);
-	dim3 bpg(length / tpb.x + 1, width / tpb.y + 1, heighth / tpb.z + 1);
+	dim3 bpg(length / threads_per_block.x + 1, width / threads_per_block.y + 1, heighth / threads_per_block.z + 1);
 
-
-
-	for (int i = 0; i < 1000; ++i)
+	for (int i = 0; i < g; ++i)
 	{
-		append_state_to_file("test.out", field0_d, length, width, heighth);
-		cuda_kernels::calc_next_generation_all_global<<<bpg, tpb>>>(field0_d, field1_d, length, width, heighth);
-		//cuda_kernels::calc_next_generation_shared_areas<<<bpg, tpb>>>(field0_d, field1_d, length, width, heighth);
-		//cuda_kernels::calculate_n_generations<<<bpg, tpb>>>(field0_d, field1_d, length, width, heighth, 1);
+		append_state_to_file(output_filename, field0_d, length, width, heighth);
+		switch (type)
+		{
+			case 0:
+				cuda_kernels::calc_next_generation_all_global<<<bpg, threads_per_block>>>(field0_d, field1_d, length, width, heighth, rules[0], rules[1], rules[2], rules[3]);
+				break;
+			case 1:
+				cuda_kernels::calc_next_generation_shared_areas<<<bpg, threads_per_block>>>(field0_d, field1_d, length, width, heighth, rules[0], rules[1], rules[2], rules[3]);
+				break;
+			case 2:
+				cuda_kernels::calculate_n_generations<<<bpg, threads_per_block>>>(skip, field0_d, field1_d, length, width, heighth, rules[0], rules[1], rules[2], rules[3]);
+				break;
+		}
 		gpuErrchk(cudaPeekAtLastError());
         gpuErrchk(cudaDeviceSynchronize());
 
